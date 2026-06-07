@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">AF_Mobile</string>
+
+    <string-array name="opcoesCategoria">
+        <item>Selecione a categoria</item>
+        <item>Estudo</item>
+        <item>Lazer</item>
+        <item>Trabalho</item>
+        <item>Alimentação</item>
+        <item>Turismo</item>
+        <item>Outro</item>
+    </string-array>
+</resources>
