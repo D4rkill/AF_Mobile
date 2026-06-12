@@ -5,8 +5,6 @@ import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -30,17 +28,16 @@ import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.location.Priority;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
-
-import org.json.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -68,9 +65,6 @@ public class MainActivity extends AppCompatActivity {
     String ventoAtual = "";
     String condicaoAtual = "";
     boolean temClima = false;
-
-    ExecutorService executor = Executors.newSingleThreadExecutor();
-    Handler handler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -171,73 +165,101 @@ public class MainActivity extends AppCompatActivity {
 
                         buscarClimaNaApi(latitudeAtual, longitudeAtual);
                     } else {
-                        Toast.makeText(this, "Não foi possível capturar a localização.", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, "Não foi possível obter a localização.", Toast.LENGTH_SHORT).show();
                     }
                 })
                 .addOnFailureListener(e -> {
-                    Toast.makeText(this, "Erro ao capturar localização.", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Erro ao capturar localização: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
     }
 
     private void buscarClimaNaApi(double latitude, double longitude) {
         txtClima.setText("Buscando clima na API...");
 
-        executor.execute(() -> {
-            try {
-                String endereco = String.format(
-                        Locale.US,
-                        "https://api.open-meteo.com/v1/forecast?latitude=%f&longitude=%f&current=temperature_2m,wind_speed_10m,weather_code&timezone=auto",
-                        latitude,
-                        longitude
-                );
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String endereco = String.format(
+                            Locale.US,
+                            "https://api.open-meteo.com/v1/forecast?latitude=%f&longitude=%f&current=temperature_2m,wind_speed_10m,weather_code&timezone=auto",
+                            latitude,
+                            longitude
+                    );
 
-                URL url = new URL(endereco);
-                HttpURLConnection conexao = (HttpURLConnection) url.openConnection();
-                conexao.setRequestMethod("GET");
-                conexao.setConnectTimeout(10000);
-                conexao.setReadTimeout(10000);
+                    URL url = new URL(endereco);
+                    HttpURLConnection conexao = (HttpURLConnection) url.openConnection();
+                    conexao.setRequestMethod("GET");
+                    conexao.setConnectTimeout(10000);
+                    conexao.setReadTimeout(10000);
 
-                BufferedReader leitor = new BufferedReader(
-                        new InputStreamReader(conexao.getInputStream())
-                );
+                    int responseCode = conexao.getResponseCode();
 
-                StringBuilder resposta = new StringBuilder();
-                String linha;
+                    if (responseCode == 200) {
+                        BufferedReader resposta = new BufferedReader(
+                                new InputStreamReader(conexao.getInputStream())
+                        );
 
-                while ((linha = leitor.readLine()) != null) {
-                    resposta.append(linha);
+                        String linha;
+                        String jsonEmString = "";
+
+                        while ((linha = resposta.readLine()) != null) {
+                            jsonEmString += linha;
+                        }
+
+                        resposta.close();
+                        conexao.disconnect();
+
+                        Gson gson = new Gson();
+                        Type tipoClima = new TypeToken<Clima>() {}.getType();
+                        Clima clima = gson.fromJson(jsonEmString, tipoClima);
+
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (clima != null && clima.getCurrent() != null) {
+                                    double temperatura = clima.getCurrent().getTemperature2m();
+                                    double vento = clima.getCurrent().getWindSpeed10m();
+                                    int codigoClima = clima.getCurrent().getWeatherCode();
+
+                                    temperaturaAtual = String.format(Locale.getDefault(), "%.1f", temperatura);
+                                    ventoAtual = String.format(Locale.getDefault(), "%.1f", vento);
+                                    condicaoAtual = traduzirCodigoClima(codigoClima);
+                                    temClima = true;
+
+                                    txtClima.setText(montarTextoClima());
+
+                                    Toast.makeText(MainActivity.this, "GPS e clima carregados!", Toast.LENGTH_SHORT).show();
+                                } else {
+                                    txtClima.setText("Erro ao ler dados do clima.");
+                                    Toast.makeText(MainActivity.this, "Erro ao converter JSON da API.", Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                        });
+
+                    } else {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                txtClima.setText("Erro na API. Código: " + responseCode);
+                                Toast.makeText(MainActivity.this, "Erro na API. Código: " + responseCode, Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }
+
+                } catch (Exception e) {
+                    String mensagem = e.getMessage();
+
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            txtClima.setText("Erro ao buscar clima.");
+                            Toast.makeText(MainActivity.this, "Erro: " + mensagem, Toast.LENGTH_LONG).show();
+                        }
+                    });
                 }
-
-                leitor.close();
-                conexao.disconnect();
-
-                JSONObject json = new JSONObject(resposta.toString());
-                JSONObject atual = json.getJSONObject("current");
-
-                double temperatura = atual.getDouble("temperature_2m");
-                double vento = atual.getDouble("wind_speed_10m");
-                int codigoClima = atual.getInt("weather_code");
-
-                String condicao = traduzirCodigoClima(codigoClima);
-
-                handler.post(() -> {
-                    temperaturaAtual = String.format(Locale.getDefault(), "%.1f", temperatura);
-                    ventoAtual = String.format(Locale.getDefault(), "%.1f", vento);
-                    condicaoAtual = condicao;
-                    temClima = true;
-
-                    txtClima.setText(montarTextoClima());
-
-                    Toast.makeText(this, "GPS e clima carregados!", Toast.LENGTH_SHORT).show();
-                });
-
-            } catch (Exception e) {
-                handler.post(() -> {
-                    txtClima.setText("Erro ao buscar clima.");
-                    Toast.makeText(this, "Erro na API de clima.", Toast.LENGTH_SHORT).show();
-                });
             }
-        });
+        }).start();
     }
 
     private void salvarVisita() {
@@ -541,11 +563,5 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Permissão de localização negada.", Toast.LENGTH_SHORT).show();
             }
         }
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        executor.shutdown();
     }
 }
